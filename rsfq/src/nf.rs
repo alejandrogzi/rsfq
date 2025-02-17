@@ -84,6 +84,7 @@ fn make_config(executor: String, queue: String, threads: usize) -> io::Result<()
     executor = '{executor}'
     queue = '{queue}'
     time = 24.h
+    memory = 2.GB
     queueSize = 200
     cpus = {threads}
 }}"#,
