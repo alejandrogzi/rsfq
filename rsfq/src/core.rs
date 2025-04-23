@@ -43,6 +43,26 @@ pub async fn get_fastqs(args: Args) {
     }
 }
 
+pub async fn get_run_metadata(args: Args) {
+    match args.accession {
+        AccessionType::Single(accession) => {
+            let query = validate_query(&accession);
+            let data = get_run_info(query, args.attempts, args.sleep).await;
+
+            if data.len() > 1 {
+                log::warn!("WARNING: More than one run found! Using the first one...");
+            }
+
+            log::info!("Found {} runs!", data.len());
+            log::info!("Run data: {:#?}", data);
+        }
+        AccessionType::List(_) => {
+            // INFO: download fastq files for a list of accessions
+            todo!()
+        }
+    }
+}
+
 pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
     run: HashMap<String, String>,
     outdir: Option<K>,
@@ -65,8 +85,9 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
             if !ftp.ends_with(R1) && !ftp.ends_with(R2) {
                 let observed = Path::new(ftp).file_name().unwrap().to_str().unwrap();
                 let expected = format!("{}.fastq.gz", run.get("run_accession").unwrap());
+                let subreads = format!("{}_subreads.fastq.gz", run.get("run_accession").unwrap());
 
-                if observed != expected {
+                if observed != expected && observed != subreads {
                     log::error!(
                         "ERROR: Expected {} but found {} in the fastq_ftp field",
                         expected,

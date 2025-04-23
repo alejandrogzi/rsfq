@@ -143,6 +143,20 @@ pub struct Args {
         ),
     )]
     pub queue: String,
+
+    #[arg(
+        short = 'M',
+        long = "metadata",
+        required = false,
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        help = "Only get metadata for accession, do not download FASTQ files"
+    )]
+    pub metadata: bool,
 }
 
 impl Args {
@@ -175,6 +189,8 @@ impl FromStr for AccessionType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let path = PathBuf::from(s);
+
+        // INFO: assuming .txt file as input
         if let Some(ext) = path.extension() {
             if ext == "txt" {
                 let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -183,6 +199,16 @@ impl FromStr for AccessionType {
                     .map(|line| line.trim().to_string())
                     .collect();
                 return Ok(AccessionType::List(accessions));
+            }
+        } else {
+            // INFO: assuming single string with multiple accessions
+            let accessions: Vec<String> =
+                s.split(',').map(|line| line.trim().to_string()).collect();
+
+            if accessions.len() > 1 {
+                return Ok(AccessionType::List(accessions));
+            } else {
+                return Ok(AccessionType::Single(s.to_string()));
             }
         }
 

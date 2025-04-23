@@ -3,7 +3,11 @@ use log::{info, Level};
 use simple_logger::init_with_level;
 use tokio;
 
-use rsfq::{cli::Args, core::get_fastqs, nf::distribute};
+use rsfq::{
+    cli::Args,
+    core::{get_fastqs, get_run_metadata},
+    nf::distribute,
+};
 
 const NF_LOG: &str = ".nextflow.log";
 const NF_WORK: &str = "work";
@@ -43,7 +47,15 @@ async fn main() {
             }
         }
     } else {
-        get_fastqs(args).await;
+        log::info!("INFO: Running in local mode...");
+
+        if args.metadata {
+            log::info!("INFO: Getting metadata...");
+            get_run_metadata(args).await;
+        } else {
+            log::info!("INFO: Downloading FASTQ files...");
+            get_fastqs(args).await;
+        }
     }
 
     let elapsed = start.elapsed();
