@@ -33,16 +33,23 @@
 /// rsfq -a accessions.txt
 /// ```
 ///
+use std::path::PathBuf;
+
 use clap::{self, Parser};
 use log::{info, Level};
 use simple_logger::init_with_level;
 use tokio;
 
-use rsfq::{cli::Args, core::get_fastqs, nf::distribute};
+use rsfq::{
+    cli::Args,
+    core::get_fastqs,
+    nf::distribute,
+    utils::{__clean_nf_dirs, __concat, __move_to_root},
+};
 
 const NF_LOG: &str = ".nextflow.log";
-const NF_WORK: &str = "work";
 const NF_HISTORY: &str = ".nextflow";
+const LOGS: &[&str] = &["err", "out"];
 
 #[tokio::main]
 async fn main() {
@@ -59,22 +66,35 @@ async fn main() {
                 std::process::exit(1);
             }
             rsfq::cli::AccessionType::List(accessions) => {
+                let outdir = args.outdir.unwrap_or(PathBuf::from("DOWNLOADS"));
+
                 log::info!("INFO: Running in Nextflow mode...");
                 distribute(
                     accessions,
                     args.executor,
                     args.attempts,
-                    args.outdir,
+                    &outdir,
                     args.threads,
                     args.queue,
                     args.sleep,
+                    args.retriever,
                 );
 
+                log::info!("INFO: Cleaning and joining output files...");
                 std::fs::remove_file(NF_LOG).expect("ERROR: Could not remove Nextflow log files!");
-                std::fs::remove_dir_all(NF_WORK)
-                    .expect("ERROR: Could not remove Nextflow work directory!");
                 std::fs::remove_dir_all(NF_HISTORY)
                     .expect("ERROR: Could not remove Nextflow history!");
+
+                // INFO: moving/joining output files
+                // INFO: here is also the place to use --group-by [not implemented yet]
+                __move_to_root(&outdir);
+
+                LOGS.iter().for_each(|log| {
+                    let file = format!("{}.{}", "rsfq", log);
+                    __concat(&outdir, log, &file);
+                });
+
+                __clean_nf_dirs(&outdir);
             }
         }
     } else {
