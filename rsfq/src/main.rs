@@ -1,13 +1,44 @@
+/// rsfq: another fastq downloader but in rust
+/// Alejandro Gonzales-Irribarren, 2025
+///
+/// This crate is a partial re-implementation of
+/// fastq-dump, a tool for downloading FASTQ files
+/// from the SRA and ENA databases. It provides a
+/// command-line interface for downloading FASTQ
+/// files and supports various options for customizing
+/// the download process. It covers the entire process
+/// from accession to download.
+///
+/// To get help, run:
+///
+/// ```shell
+/// rsfq --help
+/// ```
+///
+/// The basic usage just requires a single accession:
+///
+/// ```shell
+/// rsfq -a accession
+/// ```
+///
+/// or a list of accessions separated by commas:
+///
+/// ```shell
+/// rsfq -a accession1,accession2,accession3
+/// ```
+///
+/// or in a .txt
+///
+/// ```shell
+/// rsfq -a accessions.txt
+/// ```
+///
 use clap::{self, Parser};
 use log::{info, Level};
 use simple_logger::init_with_level;
 use tokio;
 
-use rsfq::{
-    cli::Args,
-    core::{get_fastqs, get_run_metadata},
-    nf::distribute,
-};
+use rsfq::{cli::Args, core::get_fastqs, nf::distribute};
 
 const NF_LOG: &str = ".nextflow.log";
 const NF_WORK: &str = "work";
@@ -48,14 +79,7 @@ async fn main() {
         }
     } else {
         log::info!("INFO: Running in local mode...");
-
-        if args.metadata {
-            log::info!("INFO: Getting metadata...");
-            get_run_metadata(args).await;
-        } else {
-            log::info!("INFO: Downloading FASTQ files...");
-            get_fastqs(args).await;
-        }
+        get_fastqs(args).await;
     }
 
     let elapsed = start.elapsed();

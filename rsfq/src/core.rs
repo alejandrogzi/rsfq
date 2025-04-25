@@ -22,47 +22,154 @@ const R2: &str = "_2.fastq.gz";
 const MB: usize = 1_048_576; // 1 MB
 const BUFFER_SIZE: usize = 10 * MB; // 10 MB
 
+/// Download fastq files for a single accession or a list of accessions
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
+///
+/// # Returns
+///
+/// * `Result<(), Error>` - Result of the operation
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use rsfq::core::get_fastqs;
+/// use rsfq::cli::Args;
+/// use rsfq::utils::validate_query;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let args = Args {
+///         accession: AccessionType::Single("SRR123456".to_string()),
+///         outdir: None,
+///         attempts: 3,
+///         sleep: 5,
+///         force: false,
+///         metadata: false,
+///     };
+///     get_fastqs(args).await.unwrap();
+/// }
+/// ```
 pub async fn get_fastqs(args: Args) {
     match args.accession {
         AccessionType::Single(accession) => {
-            let query = validate_query(&accession);
-            let data = get_run_info(query, args.attempts, args.sleep).await;
-
-            if data.len() > 1 {
-                log::warn!("WARNING: More than one run found! Using the first one...");
-            }
-
-            // INFO: just download the run
-            let run = data.get(0).expect("ERROR: No data found!").to_owned();
-            let _ = download_fastq(run, args.outdir, args.attempts, args.sleep, args.force).await;
+            process_run(
+                &accession,
+                args.outdir,
+                args.attempts,
+                args.sleep,
+                args.force,
+                args.metadata,
+            )
+            .await;
         }
-        AccessionType::List(_) => {
+        AccessionType::List(accessions) => {
             // INFO: download fastq files for a list of accessions
-            todo!()
+            for accession in accessions {
+                process_run(
+                    &accession,
+                    args.outdir.clone(),
+                    args.attempts,
+                    args.sleep,
+                    args.force,
+                    args.metadata,
+                )
+                .await;
+            }
         }
     }
 }
 
-pub async fn get_run_metadata(args: Args) {
-    match args.accession {
-        AccessionType::Single(accession) => {
-            let query = validate_query(&accession);
-            let data = get_run_info(query, args.attempts, args.sleep).await;
+/// Process a single run and download the FASTQ files.
+///
+/// # Arguments
+///
+/// * `accession` - The accession number of the run to process.
+/// * `outdir` - The output directory to save the downloaded files.
+/// * `attempts` - The number of attempts to make when downloading the files.
+/// * `sleep` - The number of seconds to sleep between attempts.
+/// * `force` - Whether to force the download even if the file already exists.
+/// * `metadata` - Whether to download the metadata for the run.
+///
+/// # Returns
+///
+/// * `Result<(), Error>` - A result indicating success or failure.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use rsfq::core::process_run;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let result = process_run("ERR123456", None, 3, 5, false, false).await;
+///     assert!(result.is_ok());
+/// }
+/// ```
+async fn process_run(
+    accession: &str,
+    outdir: Option<PathBuf>,
+    attempts: usize,
+    sleep: usize,
+    force: bool,
+    metadata: bool,
+) {
+    let query = validate_query(&accession);
+    let data = get_run_info(query, attempts, sleep).await;
 
-            if data.len() > 1 {
-                log::warn!("WARNING: More than one run found! Using the first one...");
-            }
+    if data.len() > 1 {
+        log::warn!("WARNING: More than one run found! Using the first one...");
+    }
 
-            log::info!("Found {} runs!", data.len());
-            log::info!("Run data: {:#?}", data);
-        }
-        AccessionType::List(_) => {
-            // INFO: download fastq files for a list of accessions
-            todo!()
-        }
+    if !metadata {
+        // INFO: just download the run
+        log::info!("INFO: Downloading FASTQ files...");
+
+        let run = data.get(0).expect("ERROR: No data found!").to_owned();
+        let _ = download_fastq(run, outdir, attempts, sleep, force).await;
+    } else {
+        log::info!("Found {} runs!", data.len());
+        log::info!("Run data: {:#?}", data);
     }
 }
 
+/// Download the FASTQ files for a given run.
+///
+/// # Arguments
+///
+/// * `run` - A HashMap containing the run information.
+/// * `outdir` - An optional output directory where the downloaded files will be saved.
+/// * `attempts` - The number of attempts to download the files.
+/// * `sleep` - The sleep duration in seconds between attempts.
+/// * `force` - A flag indicating whether to force the download even if the file already exists.
+///
+/// # Returns
+///
+/// A Result indicating the success or failure of the download operation.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use rsfq::core::download_fastq;
+/// use std::path::Path;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let run = HashMap::from([
+///         ("fastq_ftp".to_string(), "ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123456/SRR123456.fastq.gz".to_string()),
+///         ("fastq_md5".to_string(), "md5sum".to_string()),
+///         ("library_layout".to_string(), "SINGLE".to_string()),
+///     ]);
+///     let outdir = Some(Path::new("/path/to/output"));
+///     let attempts = 3;
+///     let sleep = 5;
+///     let force = false;
+///
+///     download_fastq(run, outdir, attempts, sleep, force).await;
+/// }
+/// ```
 pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
     run: HashMap<String, String>,
     outdir: Option<K>,
@@ -111,6 +218,39 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
     }
 }
 
+/// Download a file from an FTP server and verify its MD5 checksum.
+///
+/// # Arguments
+///
+/// * `ftp` - The FTP URL of the file to download.
+/// * `outdir` - The directory where the file should be downloaded.
+/// * `max_attempts` - The maximum number of download attempts.
+/// * `sleep` - The number of seconds to sleep between attempts.
+/// * `force` - Whether to overwrite an existing file.
+/// * `md5` - The expected MD5 checksum of the file.
+///
+/// # Returns
+///
+/// An `Option<PathBuf>` containing the path to the downloaded file, or `None` if the download failed.
+///
+/// # Example
+///
+/// ```
+/// use rsfq::core::download;
+/// use std::path::PathBuf;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let ftp = "ftp://ftp.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR123456/SRR123456.fastq.gz";
+///     let outdir = PathBuf::from("/path/to/output");
+///     let md5 = "md5sum";
+///
+///     match download(ftp, outdir, 3, 5, false, md5).await {
+///         Some(path) => println!("Downloaded file to: {}", path.display()),
+///         None => println!("Download failed"),
+///     }
+/// }
+/// ```
 pub async fn download<K: AsRef<Path> + Debug>(
     ftp: &str,
     outdir: K,
@@ -190,6 +330,28 @@ pub async fn download<K: AsRef<Path> + Debug>(
     Some(fastq)
 }
 
+/// Calculate the MD5 checksum of a FASTQ file.
+///
+/// # Arguments
+///
+/// * `fastq` - A reference to a `Path` or `PathBuf` representing the FASTQ file.
+///
+/// # Returns
+///
+/// An `Option<String>` containing the MD5 checksum as a hexadecimal string, or `None` if an error occurs.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use rsfq::core::md5sum;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let fastq = "path/to/fastq/file.fastq";
+///     let md5 = md5sum(fastq).await;
+///     println!("MD5 checksum: {:?}", md5);
+/// }
+/// ```
 pub async fn md5sum<K: AsRef<Path> + Debug>(fastq: &K) -> Option<String> {
     let fastq = if !fastq.as_ref().exists() {
         check_fq_path(fastq).expect("ERROR: File not found!")
@@ -213,6 +375,23 @@ pub async fn md5sum<K: AsRef<Path> + Debug>(fastq: &K) -> Option<String> {
     Some(format!("{:x}", hasher.compute()))
 }
 
+/// Check if the provided fastq path is valid and return the absolute path.
+///
+/// # Arguments
+///
+/// * `fastq` - The path to the fastq file to check.
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - The absolute path of the fastq file if it exists, or `None` if it does not.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// let fastq_path = PathBuf::from("/path/to/fastq");
+/// let absolute_path = check_fq_path(fastq_path);
+/// assert!(absolute_path.is_some());
+/// ```
 fn check_fq_path<K: AsRef<Path> + Debug>(fastq: K) -> Option<PathBuf> {
     // WARN: try to look inside the Nextflow work directory
     let nf_work_dir = std::env::current_dir().expect("ERROR: Could not get current directory!");
