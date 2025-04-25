@@ -139,7 +139,7 @@ pub struct Args {
         requires("nextflow"),
         help = "HPC queue",
         value_parser = clap::builder::PossibleValuesParser::new(
-            ["short", "long", "null"]
+            ["short", "long", "null", "batch"]
         ),
     )]
     pub queue: String,
