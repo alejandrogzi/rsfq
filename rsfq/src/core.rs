@@ -1,11 +1,10 @@
 use crate::{
     cli::{AccessionType, Args},
     provs::ena::get_run_info,
-    utils::validate_query,
+    utils::{validate_query, Retriever},
 };
 
 use md5::Context;
-use tokio::process::Command;
 use walkdir::WalkDir;
 
 use std::{
@@ -17,10 +16,24 @@ use std::{
 };
 
 const PAIRED: &str = "PAIRED";
+const SINGLE: &str = "SINGLE";
+const FASTQ_FTP: &str = "fastq_ftp";
+const FASTQ_MD5: &str = "fastq_md5";
+const LIBRARY_LAYOUT: &str = "library_layout";
+const RUN_ACCESSION: &str = "run_accession";
 const R1: &str = "_1.fastq.gz";
 const R2: &str = "_2.fastq.gz";
 const MB: usize = 1_048_576; // 1 MB
 const BUFFER_SIZE: usize = 10 * MB; // 10 MB
+
+const EXTENSIONS: &[&str] = &[
+    ".fastq.gz",
+    ".fq.gz",
+    "_subreads.fastq.gz",
+    "_subreads.fq.gz",
+    ".subreads.fastq.gz",
+    ".subreads.fq.gz",
+];
 
 /// Download fastq files for a single accession or a list of accessions
 ///
@@ -62,6 +75,7 @@ pub async fn get_fastqs(args: Args) {
                 args.sleep,
                 args.force,
                 args.metadata,
+                args.retriever,
             )
             .await;
         }
@@ -75,6 +89,7 @@ pub async fn get_fastqs(args: Args) {
                     args.sleep,
                     args.force,
                     args.metadata,
+                    args.retriever,
                 )
                 .await;
             }
@@ -115,6 +130,7 @@ async fn process_run(
     sleep: usize,
     force: bool,
     metadata: bool,
+    retriever: Retriever,
 ) {
     let query = validate_query(&accession);
     let data = get_run_info(query, attempts, sleep).await;
@@ -128,7 +144,9 @@ async fn process_run(
         log::info!("INFO: Downloading FASTQ files...");
 
         let run = data.get(0).expect("ERROR: No data found!").to_owned();
-        let _ = download_fastq(run, outdir, attempts, sleep, force).await;
+        log::info!("Run data: {:#?}", data);
+
+        let _ = download_fastq(run, outdir, attempts, sleep, force, retriever).await;
     } else {
         log::info!("Found {} runs!", data.len());
         log::info!("Run data: {:#?}", data);
@@ -176,46 +194,92 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
     attempts: usize,
     sleep: usize,
     force: bool,
+    retriever: Retriever,
 ) {
-    let ftp = run
-        .get("fastq_ftp")
+    let fastq_ftp = run
+        .get(FASTQ_FTP)
         .expect("ERROR: No fastq_ftp field found in the run data!");
-    let md5 = run
-        .get("fastq_md5")
+    let fastq_md5 = run
+        .get(FASTQ_MD5)
         .expect("ERROR: No fastq_md5 field found in the run data!");
     let layout = run
-        .get("library_layout")
+        .get(LIBRARY_LAYOUT)
         .expect("ERROR: No library_layout field found in the run data!");
+    let accession = run
+        .get(RUN_ACCESSION)
+        .expect("ERROR: No run_accession field found in the run data!");
 
-    for (ftp, md5) in ftp.split(';').zip(md5.split(';')) {
+    let outdir = outdir
+        .as_ref()
+        .map(|x| x.as_ref())
+        .unwrap_or_else(|| Path::new("DOWNLOADS"));
+
+    let ftp_entries = fastq_ftp.split(';');
+    let md5_entries = fastq_md5.split(';');
+
+    for (ftp, md5) in ftp_entries.zip(md5_entries) {
+        let observed = Path::new(ftp)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_else(|| {
+                log::error!("ERROR: Could not extract filename from {}", ftp);
+                std::process::exit(1);
+            });
+
         if layout == PAIRED {
-            if !ftp.ends_with(R1) && !ftp.ends_with(R2) {
-                let observed = Path::new(ftp).file_name().unwrap().to_str().unwrap();
-                let expected = format!("{}.fastq.gz", run.get("run_accession").unwrap());
-                let subreads = format!("{}_subreads.fastq.gz", run.get("run_accession").unwrap());
-
-                if observed != expected && observed != subreads {
+            if !(ftp.ends_with(R1) || ftp.ends_with(R2)) {
+                if !__has_expected_filename(accession, observed, EXTENSIONS) {
                     log::error!(
-                        "ERROR: Expected {} but found {} in the fastq_ftp field",
-                        expected,
+                        "ERROR: Expected {}.fastq.gz/.fq.gz/*subreads.fastq.gz but found {} in the fastq_ftp field",
+                        accession,
                         observed
                     );
                     std::process::exit(1);
                 }
             }
-
-            if !md5.is_empty() {
-                let outdir = outdir
-                    .as_ref()
-                    .map(|x| x.as_ref())
-                    .unwrap_or_else(|| Path::new("DOWNLOADS"));
-                let _ = download(ftp, outdir, attempts, sleep, force, md5).await;
-            } else {
-                log::error!("ERROR: No MD5 checksum found for {}", ftp);
+        } else if layout == SINGLE {
+            if !__has_expected_filename(accession, observed, EXTENSIONS) {
+                log::error!(
+                    "ERROR: Expected {}.fastq.gz/.fq.gz/*subreads.fastq.gz but found {} in the fastq_ftp field",
+                    accession,
+                    observed
+                );
                 std::process::exit(1);
             }
         }
+
+        if md5.is_empty() {
+            log::error!("ERROR: No MD5 checksum found for {}", ftp);
+            std::process::exit(1);
+        }
+
+        let _ = download(ftp, outdir, attempts, sleep, force, md5, retriever).await;
     }
+}
+
+/// Check if a filename has one of the expected extensions.
+///
+/// # Arguments
+///
+/// * `filename` - The filename to check.
+/// * `extensions` - The expected extensions.
+///
+/// # Returns
+///
+/// `true` if the filename has one of the expected extensions, `false` otherwise.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let filename = "example.fastq.gz";
+/// let extensions = &["fastq.gz", "fq.gz"];
+/// assert!(__has_expected_filename(filename, extensions));
+/// ```
+fn __has_expected_filename(accession: &str, observed: &str, extensions: &[&str]) -> bool {
+    extensions.iter().any(|&ext| {
+        let expected = format!("{}{}", accession, ext);
+        expected == observed
+    })
 }
 
 /// Download a file from an FTP server and verify its MD5 checksum.
@@ -258,6 +322,7 @@ pub async fn download<K: AsRef<Path> + Debug>(
     sleep: usize,
     force: bool,
     md5: &str,
+    retriever: Retriever,
 ) -> Option<PathBuf> {
     let mut attempt = 0;
     let fastq = outdir.as_ref().join(
@@ -268,7 +333,8 @@ pub async fn download<K: AsRef<Path> + Debug>(
             .expect("ERROR: Invalid file name!"),
     );
 
-    log::info!("Downloading {} to {}", ftp, fastq.display(),);
+    log::info!("Downloading {} to {}", ftp, fastq.display());
+
     if fastq.exists() {
         if force {
             log::warn!(
@@ -284,17 +350,14 @@ pub async fn download<K: AsRef<Path> + Debug>(
         }
     }
 
-    let mut cmd = Command::new("aria2c");
-    cmd.arg("-x4")
-        .arg("-c")
-        .arg(format!("-o {}", fastq.display()))
-        .arg(format!("http://{}", ftp));
+    let mut cmd = retriever.materialize(ftp, &fastq);
 
     while max_attempts >= attempt {
         let output = cmd
             .output()
             .await
             .expect("ERROR: Failed to execute command");
+
         let status = output.status.code().expect("ERROR: No exit code found!");
 
         if status != 0 {
