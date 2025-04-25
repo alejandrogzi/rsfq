@@ -1,6 +1,8 @@
 use clap::{ArgAction, Parser};
 use std::{path::PathBuf, str::FromStr};
 
+use crate::utils::Retriever;
+
 #[derive(Debug, Parser)]
 pub struct Args {
     #[arg(
@@ -157,6 +159,16 @@ pub struct Args {
         help = "Only get metadata for accession, do not download FASTQ files"
     )]
     pub metadata: bool,
+
+    #[arg(
+        short = 'T',
+        long = "tool",
+        required = false,
+        value_name = "TOOL",
+        help = "Downloader tool to use for downloading FASTQ files",
+        default_value("aria2c")
+    )]
+    pub retriever: Retriever,
 }
 
 impl Args {
