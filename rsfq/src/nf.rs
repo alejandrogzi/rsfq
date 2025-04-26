@@ -7,6 +7,7 @@ use crate::utils::Retriever;
 const NF_SCRIPT: &str = "rsfq.nf";
 const NF_CONFIG: &str = "nextflow.config";
 const JOBLIST: &str = "joblist.txt";
+const TARGET: &str = "target/release/rsfq";
 
 /// Distributes the given accessions to the specified executor.
 ///
@@ -52,7 +53,11 @@ pub fn distribute(
     let joblist = accessions.join("\n");
     std::fs::write(JOBLIST, &joblist).expect("ERROR: Could not create joblist file!");
 
-    make_script(attempts, sleep).expect("ERROR: Could not create nextflow script!");
+    let target = std::env::current_dir()
+        .expect("ERROR: could not get current_dir!")
+        .join(TARGET);
+
+    make_script(target, attempts, sleep).expect("ERROR: Could not create nextflow script!");
     make_config(executor, queue, threads).expect("ERROR: Could not create nextflow config!");
 
     let outdir = outdir
@@ -113,7 +118,7 @@ pub fn distribute(
 ///
 /// make_script(max_attempts, sleep).expect("ERROR: Failed to create Nextflow script!");
 /// ```
-fn make_script(max_attempts: usize, sleep: usize) -> io::Result<()> {
+fn make_script(target: PathBuf, max_attempts: usize, sleep: usize) -> io::Result<()> {
     let script = format!(
         r#"#!/usr/bin/env nextflow
 
@@ -125,7 +130,7 @@ process GET {{
 
     script:
     """
-    cargo run --release -- -a ${{run}} --outdir ${{outdir}} --max-attempts {max_attempts} --sleep {sleep} -T ${{retriever}}
+    {target} -a ${{run}} --outdir ${{outdir}} --max-attempts {max_attempts} --sleep {sleep} -T ${{retriever}}
     """
 
 }}
@@ -138,6 +143,7 @@ workflow {{
     GET(joblist, outdir, retriever)
 }}
 "#,
+        target = target.display(),
         max_attempts = max_attempts,
         sleep = sleep
     );
