@@ -4,6 +4,7 @@ use crate::{
     utils::{validate_query, Retriever},
 };
 
+use futures::stream::{self, StreamExt};
 use md5::Context;
 use walkdir::WalkDir;
 
@@ -25,6 +26,7 @@ const R1: &str = "_1.fastq.gz";
 const R2: &str = "_2.fastq.gz";
 const MB: usize = 1_048_576; // 1 MB
 const BUFFER_SIZE: usize = 10 * MB; // 10 MB
+const QUEUE_SIZE: usize = 50; // 50 requests
 
 const EXTENSIONS: &[&str] = &[
     ".fastq.gz",
@@ -69,7 +71,7 @@ pub async fn get_fastqs(args: Args) {
     match args.accession {
         AccessionType::Single(accession) => {
             process_run(
-                &accession,
+                accession.clone(),
                 args.outdir,
                 args.attempts,
                 args.sleep,
@@ -81,18 +83,20 @@ pub async fn get_fastqs(args: Args) {
         }
         AccessionType::List(accessions) => {
             // INFO: download fastq files for a list of accessions
-            for accession in accessions {
+            let stream = stream::iter(accessions.into_iter().map(|accession| {
                 process_run(
-                    &accession,
+                    accession.clone(),
                     args.outdir.clone(),
                     args.attempts,
                     args.sleep,
                     args.force,
                     args.metadata,
-                    args.retriever,
+                    args.retriever.clone(),
                 )
-                .await;
-            }
+            }))
+            .buffer_unordered(QUEUE_SIZE);
+
+            stream.collect::<Vec<_>>().await;
         }
     }
 }
@@ -124,7 +128,7 @@ pub async fn get_fastqs(args: Args) {
 /// }
 /// ```
 async fn process_run(
-    accession: &str,
+    accession: String,
     outdir: Option<PathBuf>,
     attempts: usize,
     sleep: usize,
