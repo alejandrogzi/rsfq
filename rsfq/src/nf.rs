@@ -70,33 +70,24 @@ pub fn distribute(
     std::fs::create_dir_all(&outdir).expect("ERROR: Could not create output directory!");
     std::env::set_var("NXF_WORK", outdir.clone());
 
-    let mut cmd = std::process::Command::new("nextflow");
+    let cmd = format!(
+        "nextflow run {} --joblist {} --outdir {} --retriever {} -c {}",
+        NF_SCRIPT,
+        JOBLIST,
+        outdir,
+        retriever.to_string(),
+        NF_CONFIG
+    );
 
-    cmd.arg("run")
-        .arg(
-            std::env::current_dir()
-                .expect("ERROR: could not get current_dir!")
-                .join(NF_SCRIPT),
-        )
-        .arg("--joblist")
-        .arg(
-            std::env::current_dir()
-                .expect("ERROR: could not get current_dir!")
-                .join(JOBLIST),
-        )
-        .arg("--outdir")
-        .arg(outdir)
-        .arg("--retriever")
-        .arg(retriever.to_string())
+    log::info!("Running Nextflow command: {}", cmd);
+
+    let job = std::process::Command::new("bash")
         .arg("-c")
-        .arg(
-            std::env::current_dir()
-                .expect("ERROR: could not get current_dir!")
-                .join(NF_CONFIG),
-        );
+        .arg(cmd)
+        .status()
+        .expect("ERROR: Failed to run nextflow!");
 
-    let status = cmd.status().expect("ERROR: Failed to run nextflow!");
-    if !status.success() {
+    if !job.success() {
         std::process::exit(1);
     }
 
