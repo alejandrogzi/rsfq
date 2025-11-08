@@ -184,13 +184,22 @@ fn make_config(
 ) -> io::Result<()> {
     let config = format!(
         r#"process {{
-    executor = '{executor}'
-    queue = '{queue}'
-    time = 24.h
-    memory = 2.GB
-    queueSize = {queue_size}
-    cpus = {threads}
-}}"#,
+        executor = '{executor}'
+        cpus = params.cpus
+    }}
+
+    params {{
+        cpus = {threads}
+        time = 24.h
+        queue = '{queue}'
+        memory = 2.GB
+    }}
+
+    executor {{
+        name = '{executor}'
+        queueSize = {queue_size}
+    }}
+    "#,
         executor = executor,
         queue = queue,
         threads = threads
