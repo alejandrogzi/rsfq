@@ -49,6 +49,7 @@ pub fn distribute(
     queue: String,
     sleep: usize,
     retriever: Retriever,
+    queue_size: usize,
 ) {
     let joblist = accessions.join("\n");
     std::fs::write(JOBLIST, &joblist).expect("ERROR: Could not create joblist file!");
@@ -58,7 +59,8 @@ pub fn distribute(
         .join(TARGET);
 
     make_script(target, attempts, sleep).expect("ERROR: Could not create nextflow script!");
-    make_config(executor, queue, threads).expect("ERROR: Could not create nextflow config!");
+    make_config(executor, queue, threads, queue_size)
+        .expect("ERROR: Could not create nextflow config!");
 
     let outdir = outdir
         .to_str()
@@ -177,14 +179,19 @@ workflow {{
 ///
 /// make_config(executor, queue, threads).expect("ERROR: Failed to create Nextflow configuration file!");
 /// ```
-fn make_config(executor: String, queue: String, threads: usize) -> io::Result<()> {
+fn make_config(
+    executor: String,
+    queue: String,
+    threads: usize,
+    queue_size: usize,
+) -> io::Result<()> {
     let config = format!(
         r#"process {{
     executor = '{executor}'
     queue = '{queue}'
     time = 24.h
     memory = 2.GB
-    queueSize = 200
+    queueSize = {queue_size}
     cpus = {threads}
 }}"#,
         executor = executor,

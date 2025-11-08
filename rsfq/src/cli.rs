@@ -176,6 +176,16 @@ pub struct Args {
         default_value("aria2c")
     )]
     pub retriever: Retriever,
+
+    #[arg(
+        short = 'Q',
+        long = "queue-size",
+        required = false,
+        value_name = "SIZE",
+        help = "Maximum number of jobs to run in parallel",
+        default_value("200")
+    )]
+    pub queue_size: usize,
 }
 
 impl Args {

@@ -78,6 +78,7 @@ async fn main() {
                     args.queue,
                     args.sleep,
                     args.retriever,
+                    args.queue_size,
                 );
 
                 log::info!("INFO: Cleaning and joining output files...");
@@ -89,10 +90,10 @@ async fn main() {
                 // INFO: here is also the place to use --group-by [not implemented yet]
                 __move_to_root(&outdir);
 
-                LOGS.iter().for_each(|log| {
-                    let file = format!("{}.{}", "rsfq", log);
-                    __concat(&outdir, log, &file);
-                });
+                // LOGS.iter().for_each(|log| {
+                //     let file = format!("{}.{}", "rsfq", log);
+                //     __concat(&outdir, log, &file);
+                // });
 
                 __clean_nf_dirs(&outdir);
             }
