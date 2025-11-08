@@ -78,6 +78,7 @@ pub async fn get_fastqs(args: Args) {
                 args.force,
                 args.metadata,
                 args.retriever,
+                args.check_if_downloadable,
             )
             .await;
         }
@@ -92,6 +93,7 @@ pub async fn get_fastqs(args: Args) {
                     args.force,
                     args.metadata,
                     args.retriever.clone(),
+                    args.check_if_downloadable,
                 )
             }))
             .buffer_unordered(QUEUE_SIZE);
@@ -135,6 +137,7 @@ async fn process_run(
     force: bool,
     metadata: bool,
     retriever: Retriever,
+    check_if_downloadable: bool,
 ) {
     let query = validate_query(&accession);
     let data = get_run_info(query, attempts, sleep).await;
@@ -143,7 +146,7 @@ async fn process_run(
         log::warn!("WARNING: More than one run found! Using the first one...");
     }
 
-    if !metadata {
+    if !metadata && !check_if_downloadable {
         // INFO: just download the run
         log::info!("INFO: Downloading FASTQ files...");
 
@@ -152,8 +155,30 @@ async fn process_run(
 
         let _ = download_fastq(run, outdir, attempts, sleep, force, retriever).await;
     } else {
-        log::info!("Found {} runs!", data.len());
-        log::info!("Run data: {:#?}", data);
+        if check_if_downloadable {
+            let binding = HashMap::new();
+            let run = data.get(0).unwrap_or(&binding);
+
+            if run.is_empty() {
+                // INFO: accession does not exist in provider
+                println!("NOT_FOUND\t{}", accession);
+            } else {
+                // INFO: accession exists and now checking if FTP exists
+                let binding = String::new();
+                let fastq_ftp = run.get(FASTQ_FTP).unwrap_or(&binding);
+
+                if fastq_ftp.is_empty() {
+                    // INFO: accession exists but no FTP field
+                    println!("NOT_FOUND\t{}", accession);
+                } else {
+                    // INFO: accession exists and FTP field exists
+                    println!("DOWNLOADABLE\t{}", accession);
+                }
+            }
+        } else {
+            log::info!("Found {} runs!", data.len());
+            log::info!("Run data: {:#?}", data);
+        }
     }
 }
 

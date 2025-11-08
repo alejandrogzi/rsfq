@@ -26,10 +26,11 @@ pub async fn get_run_info(
             ENAServerResponse::Error(status, message) => {
                 attempts += 1;
                 log::error!(
-                    "ERROR: Request failed with status {}: {}. Attempts til now {}",
+                    "ERROR: Request failed with status {}: {}. Attempts til now {} for query {}",
                     status,
                     message,
-                    attempts
+                    attempts,
+                    query
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(sleep as u64)).await;
             }
@@ -37,7 +38,11 @@ pub async fn get_run_info(
     }
 
     if result.is_empty() {
-        log::error!("ERROR: No data found after {} attempts", max_attempts);
+        log::error!(
+            "ERROR: No data found after {} attempts for {}",
+            max_attempts,
+            query
+        );
         std::process::exit(1);
     } else {
         result
@@ -82,20 +87,27 @@ pub async fn get_ena_metadata(query: &String) -> ENAServerResponse {
                     .collect();
 
                 if data.is_empty() {
-                    log::warn!("Query was successful, but received an empty response");
+                    log::warn!(
+                        "ERROR: Query was successful, but received an empty response for query {}",
+                        query
+                    );
                     ENAServerResponse::Error(
                         200,
-                        "Query was successful, but received an empty response".to_string(),
+                        "ERROR: Query was successful, but received an empty response for query"
+                            .to_string(),
                     )
                 } else {
                     log::info!("Successfully retrieved data from ENA!");
                     ENAServerResponse::Success(data)
                 }
             } else {
-                log::warn!("Query was successful, but response was empty");
+                log::warn!(
+                    "WARN: Query was successful, but response was empty for query {}",
+                    query
+                );
                 ENAServerResponse::Error(
                     200,
-                    "Query was successful, but response was empty".to_string(),
+                    "ERROR: Query was successful, but response was empty".to_string(),
                 )
             }
         }

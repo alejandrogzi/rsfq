@@ -160,6 +160,13 @@ pub struct Args {
     )]
     pub metadata: bool,
 
+    #[arg(short = 'D',
+        long = "check",
+        required = false,
+        action = ArgAction::SetTrue,
+        help = "Check if the fastq file is downloadable from the provider")]
+    pub check_if_downloadable: bool,
+
     #[arg(
         short = 'T',
         long = "tool",
