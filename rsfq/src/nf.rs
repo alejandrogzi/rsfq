@@ -6,7 +6,7 @@ use crate::utils::Retriever;
 
 const NF_SCRIPT: &str = "rsfq.nf";
 const NF_CONFIG: &str = "nextflow.config";
-const JOBLIST: &str = "joblist.txt";
+const JOBLIST: &str = "joblist";
 const TARGET: &str = "target/release/rsfq";
 
 /// Distributes the given accessions to the specified executor.
@@ -87,7 +87,13 @@ pub fn distribute(
         .arg("--outdir")
         .arg(outdir)
         .arg("--retriever")
-        .arg(retriever.to_string());
+        .arg(retriever.to_string())
+        .arg("-c")
+        .arg(
+            std::env::current_dir()
+                .expect("ERROR: could not get current_dir!")
+                .join(NF_CONFIG),
+        );
 
     let status = cmd.status().expect("ERROR: Failed to run nextflow!");
     if !status.success() {
