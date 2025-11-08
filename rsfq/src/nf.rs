@@ -59,7 +59,7 @@ pub fn distribute(
         .join(TARGET);
 
     make_script(target, attempts, sleep).expect("ERROR: Could not create nextflow script!");
-    make_config(executor, queue, threads, queue_size)
+    make_config(executor.clone(), queue, threads, queue_size)
         .expect("ERROR: Could not create nextflow config!");
 
     let outdir = outdir
@@ -71,12 +71,13 @@ pub fn distribute(
     std::env::set_var("NXF_WORK", outdir.clone());
 
     let cmd = format!(
-        "nextflow run {} --joblist {} --outdir {} --retriever {} -c {}",
+        "nextflow run {} --joblist {} --outdir {} --retriever {} -c {} -profile {}",
         NF_SCRIPT,
         JOBLIST,
         outdir,
         retriever.to_string(),
-        NF_CONFIG
+        NF_CONFIG,
+        executor
     );
 
     log::info!("Running Nextflow command: {}", cmd);
@@ -184,20 +185,27 @@ fn make_config(
 ) -> io::Result<()> {
     let config = format!(
         r#"process {{
-        executor = '{executor}'
-        cpus = params.cpus
-    }}
-
-    params {{
         cpus = {threads}
         time = 24.h
-        queue = '{queue}'
         memory = 2.GB
     }}
 
-    executor {{
-        name = '{executor}'
-        queueSize = {queue_size}
+    profiles {{
+        {executor} {{
+            process {{
+                executor = '{executor}'
+                queue = '{queue}'
+                cpus = {threads}
+                memory = 2.GB
+                time = 24.h
+            }}
+
+            executor {{
+                clusterOptions = null
+                queueSize = {queue_size}
+                array = null
+            }}
+        }}
     }}
     "#,
         executor = executor,
