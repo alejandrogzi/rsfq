@@ -7,12 +7,22 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 
-static PROJECT_STUDY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^PRJ[EDN][A-Z][0-9]+$|^[EDS]RP[0-9]{6,}$").unwrap());
-static SAMPLE_BIOSAMPLE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^SAM[EDN][A-Z]?[0-9]+$|^[EDS]RS[0-9]{6,}$").unwrap());
-static EXPERIMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[EDS]RX[0-9]{6,}$").unwrap());
-static RUN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[EDS]RR[0-9]{6,}$").unwrap());
+static PROJECT_STUDY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^PRJ[EDN][A-Z][0-9]+$|^[EDS]RP[0-9]{6,}$")
+        .unwrap_or_else(|e| panic!("Failed to compile PROJECT_STUDY_RE regex: {}", e))
+});
+static SAMPLE_BIOSAMPLE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^SAM[EDN][A-Z]?[0-9]+$|^[EDS]RS[0-9]{6,}$")
+        .unwrap_or_else(|e| panic!("Failed to compile SAMPLE_BIOSAMPLE_RE regex: {}", e))
+});
+static EXPERIMENT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^[EDS]RX[0-9]{6,}$")
+        .unwrap_or_else(|e| panic!("Failed to compile EXPERIMENT_RE regex: {}", e))
+});
+static RUN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^[EDS]RR[0-9]{6,}$")
+        .unwrap_or_else(|e| panic!("Failed to compile RUN_RE regex: {}", e))
+});
 
 /// Validate a query string and return a formatted query string.
 ///
@@ -27,9 +37,12 @@ static RUN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[EDS]RR[0-9]{6,}$").unwr
 /// # Examples
 ///
 /// ```
-/// let query = "PRJEDNA12345";
-/// let formatted_query = validate_query(query);
-/// assert_eq!(formatted_query, "(study_accession=PRJEDNA12345 OR secondary_study_accession=PRJEDNA12345)");
+/// fn main() {
+///     use rsfq::utils::validate_query;
+///     let query = "PRJEB12345";
+///     let formatted_query = validate_query(query);
+///     assert_eq!(formatted_query, "(study_accession=PRJEB12345 OR secondary_study_accession=PRJEB12345)");
+/// }
 /// ```
 pub fn validate_query(query: &str) -> String {
     if PROJECT_STUDY_RE.is_match(query) {
@@ -71,13 +84,6 @@ pub fn check_nf() {
 ///
 /// # Arguments
 /// * `outdir` - The output directory to move the files to
-///
-/// # Example
-/// ```rust, no_run
-/// use std::path::PathBuf;
-/// let outdir = PathBuf::from("/path/to/output");
-/// __move_to_root(&outdir);
-/// ```
 pub fn __move_to_root(outdir: &PathBuf) {
     for entry in WalkDir::new(outdir)
         .into_iter()
@@ -87,7 +93,10 @@ pub fn __move_to_root(outdir: &PathBuf) {
         })
     {
         let dest = outdir.join(entry.file_name());
-        std::fs::rename(entry.path(), dest).expect("ERROR: Failed to move file");
+        std::fs::rename(entry.path(), dest).unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to move file: {}", e);
+            std::process::exit(1);
+        });
     }
 }
 
@@ -95,21 +104,22 @@ pub fn __move_to_root(outdir: &PathBuf) {
 ///
 /// # Arguments
 /// * `outdir` - The output directory to clean up
-///
-/// # Example
-/// ```rust, no_run
-/// use std::path::PathBuf;
-///
-/// let outdir = PathBuf::from("/path/to/output");
-/// __clean_nf_dirs(&outdir);
-/// ```
 pub fn __clean_nf_dirs(outdir: &PathBuf) {
-    for entry in std::fs::read_dir(outdir).expect("ERROR: Failed to read directory") {
-        let entry = entry.expect("ERROR: Failed to read directory entry");
+    for entry in std::fs::read_dir(outdir).unwrap_or_else(|e| {
+        log::error!("ERROR: Failed to read directory: {}", e);
+        std::process::exit(1);
+    }) {
+        let entry = entry.unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to read directory entry: {}", e);
+            std::process::exit(1);
+        });
         let path = entry.path();
 
         if path.is_dir() {
-            std::fs::remove_dir_all(&path).expect("ERROR: Failed to remove directory");
+            std::fs::remove_dir_all(&path).unwrap_or_else(|e| {
+                log::error!("ERROR: Failed to remove directory: {}", e);
+                std::process::exit(1);
+            });
         }
     }
 }
@@ -120,18 +130,12 @@ pub fn __clean_nf_dirs(outdir: &PathBuf) {
 /// * `outdir` - The output directory to move the files to
 /// * `extension` - The file extension to match
 /// * `file` - The output file name
-///
-/// # Example
-/// ```rust, no_run
-/// use std::path::PathBuf;
-///
-/// let outdir = PathBuf::from("/path/to/output");
-/// __concat(&outdir, "err", "rsfq.err");
-/// ```
 pub fn __concat(outdir: &PathBuf, extension: &str, file: &str) {
     let out_path = outdir.join(file);
-    let mut writer =
-        BufWriter::new(File::create(out_path).expect("ERROR: Failed to create output file"));
+    let mut writer = BufWriter::new(File::create(out_path).unwrap_or_else(|e| {
+        log::error!("ERROR: Failed to create output file: {}", e);
+        std::process::exit(1);
+    }));
 
     for entry in WalkDir::new(outdir)
         .into_iter()
@@ -140,9 +144,14 @@ pub fn __concat(outdir: &PathBuf, extension: &str, file: &str) {
             e.file_type().is_file() && e.path().extension().map_or(false, |ext| ext == extension)
         })
     {
-        let mut reader =
-            BufReader::new(File::open(entry.path()).expect("ERROR: Failed to open file"));
-        std::io::copy(&mut reader, &mut writer).expect("ERROR: Failed to concatenate files");
+        let mut reader = BufReader::new(File::open(entry.path()).unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to open file: {}", e);
+            std::process::exit(1);
+        }));
+        std::io::copy(&mut reader, &mut writer).unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to concatenate files: {}", e);
+            std::process::exit(1);
+        });
     }
 }
 
@@ -167,6 +176,7 @@ impl Retriever {
     /// # Examples
     /// ```rust, no_run
     /// use rsfq::utils::Retriever;
+    /// use std::path::PathBuf;
     ///
     /// let retriever = Retriever::Wget;
     /// let url = "https://example.com/file.txt";
@@ -214,8 +224,8 @@ impl Retriever {
 /// # Examples
 /// ```rust, no_run
 /// use rsfq::utils::Retriever;
-
-/// let retriever = Retriever::from_str("aria2c").unwrap();
+/// use std::str::FromStr;
+/// let retriever = Retriever::from_str("aria2c");
 /// ```
 impl std::str::FromStr for Retriever {
     type Err = String;
@@ -235,7 +245,7 @@ impl std::str::FromStr for Retriever {
 /// # Examples
 /// ```rust, no_run
 /// use rsfq::utils::Retriever;
-
+/// use std::str::FromStr;
 /// let retriever = Retriever::from_str("aria2c").unwrap();
 /// println!("{}", retriever);
 /// ```
@@ -245,6 +255,67 @@ impl std::fmt::Display for Retriever {
             Retriever::Wget => write!(f, "wget"),
             Retriever::Aria2c => write!(f, "aria2c"),
             Retriever::Curl => write!(f, "curl"),
+        }
+    }
+}
+
+/// Enum representing the layout of FASTQ files
+#[derive(Debug, Clone, Copy)]
+pub enum Layout {
+    Single,
+    Paired,
+    Global,
+}
+
+impl std::str::FromStr for Layout {
+    type Err = String;
+
+    /// Parse a string into a Layout
+    ///
+    /// # Arguments
+    /// * `s` - The string to parse.
+    ///
+    /// # Returns
+    /// * `Result<Self, Self::Err>` - The parsed Layout.
+    ///
+    /// # Examples
+    /// ```rust, no_run
+    /// use rsfq::utils::Layout;
+    /// use std::str::FromStr;
+    /// let layout = Layout::from_str("single");
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "single" => Ok(Layout::Single),
+            "paired" => Ok(Layout::Paired),
+            "global" => Ok(Layout::Global),
+            _ => Err(format!("Invalid layout: {}", s)),
+        }
+    }
+}
+
+/// Display the name of the `Layout` instance.
+impl std::fmt::Display for Layout {
+    /// Format the `Layout` instance as a string.
+    ///
+    /// # Arguments
+    /// * `f` - The formatter to use.
+    ///
+    /// # Returns
+    /// * `std::fmt::Result` - The formatted string.
+    ///
+    /// # Examples
+    /// ```rust, no_run
+    /// use rsfq::utils::Layout;
+    /// use std::str::FromStr;
+    /// let layout = Layout::from_str("single").unwrap();
+    /// println!("{}", layout);
+    /// ```
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Layout::Single => write!(f, "single"),
+            Layout::Paired => write!(f, "paired"),
+            Layout::Global => write!(f, "global"),
         }
     }
 }

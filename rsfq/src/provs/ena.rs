@@ -8,6 +8,33 @@ pub enum ENAServerResponse {
     Error(u16, String),
 }
 
+/// Get run information from ENA.
+///
+/// # Arguments
+///
+/// * `query` - The query to search for.
+/// * `max_attempts` - The maximum number of attempts to make when retrieving data.
+/// * `sleep` - The number of seconds to sleep between attempts.
+///
+/// # Returns
+///
+/// A `Vec<HashMap<String, String>>` containing the run information.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use rsfq::provs::ena::get_run_info;
+/// use std::collections::HashMap;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let query = "SRR123456".to_string();
+///     let max_attempts = 3;
+///     let sleep = 5;
+///     let result = get_run_info(query, max_attempts, sleep).await;
+///     println!("Run data: {:#?}", result);
+/// }
+/// ```
 pub async fn get_run_info(
     query: String,
     max_attempts: usize,
@@ -49,6 +76,30 @@ pub async fn get_run_info(
     }
 }
 
+/// Get metadata from ENA.
+///
+/// # Arguments
+///
+/// * `query` - The query to search for.
+///
+/// # Returns
+///
+/// A `ENAServerResponse` containing the metadata.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use rsfq::provs::ena::{get_ena_metadata, ENAServerResponse};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let query = "SRR123456".to_string();
+///     match get_ena_metadata(&query).await {
+///         ENAServerResponse::Success(data) => println!("Metadata entries: {}", data.len()),
+///         ENAServerResponse::Error(_, message) => println!("Failed: {}", message),
+///     }
+/// }
+/// ```
 pub async fn get_ena_metadata(query: &String) -> ENAServerResponse {
     let client = Client::new();
     let url = format!(r#"{}&query="{}"&fields=all"#, ENA_URL, query);

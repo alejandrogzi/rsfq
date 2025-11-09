@@ -1,9 +1,23 @@
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, ArgGroup, Parser};
 use std::{path::PathBuf, str::FromStr};
 
-use crate::utils::Retriever;
+use crate::{
+    provs::Provider,
+    utils::{Layout, Retriever},
+};
 
 #[derive(Debug, Parser)]
+#[clap(
+    name="rsfq",
+    author = env!("CARGO_PKG_AUTHORS"), version =
+    env!("CARGO_PKG_VERSION"),
+    about = "A CLI tool for downloading FASTQ files from ENA or SRA")]
+#[command(
+    group(
+        ArgGroup::new("nextflow")
+        .required(false)
+        .args(&["executor", "queue", "queue_size"]))
+)]
 pub struct Args {
     #[arg(
         short = 'a',
@@ -186,15 +200,39 @@ pub struct Args {
         default_value("200")
     )]
     pub queue_size: usize,
+
+    #[arg(
+        short = 'L',
+        long = "layout",
+        required = false,
+        value_name = "LAYOUT",
+        default_value("global"),
+        help = "Layout of FASTQ files"
+    )]
+    pub layout: Layout,
+
+    #[arg(
+        short = 'P',
+        long = "provider",
+        required = false,
+        value_name = "PROVIDER",
+        default_value("ena"),
+        help = "Provider to use for downloading FASTQ files"
+    )]
+    pub provider: Provider,
 }
 
+/// Check the arguments and make sure they are valid
 impl Args {
     pub fn check(&self) {
         // INFO: if dir already exists, do not overwrite
 
         if let Some(outdir) = &self.outdir {
             if !outdir.exists() {
-                std::fs::create_dir_all(outdir).expect("ERROR: Failed to create output directory!");
+                std::fs::create_dir_all(outdir).unwrap_or_else(|e| {
+                    log::error!("ERROR: Failed to create output directory!: {}", e);
+                    std::process::exit(1);
+                });
             }
         }
 
@@ -207,15 +245,31 @@ impl Args {
     }
 }
 
+/// Enum representing the different types of accessions
 #[derive(Debug, Clone)]
 pub enum AccessionType {
     Single(String),
     List(Vec<String>),
 }
 
+/// Parse a string into an AccessionType
 impl FromStr for AccessionType {
     type Err = String;
 
+    /// Parse a string into an AccessionType
+    ///
+    /// # Arguments
+    /// * `s` - The string to parse.
+    ///
+    /// # Returns
+    /// * `Result<Self, Self::Err>` - The parsed AccessionType.
+    ///
+    /// # Examples
+    /// ```rust, no_run
+    /// use rsfq::cli::AccessionType;
+    /// use std::str::FromStr;
+    /// let accession = AccessionType::from_str("PRJEDNA12345");
+    /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let path = PathBuf::from(s);
 

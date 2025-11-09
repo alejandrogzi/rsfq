@@ -1,13 +1,10 @@
 /// rsfq: another fastq downloader but in rust
 /// Alejandro Gonzales-Irribarren, 2025
 ///
-/// This crate is a partial re-implementation of
-/// fastq-dump, a tool for downloading FASTQ files
-/// from the SRA and ENA databases. It provides a
-/// command-line interface for downloading FASTQ
-/// files and supports various options for customizing
-/// the download process. It covers the entire process
-/// from accession to download.
+/// This crate is a partial re-implementation of fastq-dump, a tool for downloading FASTQ files
+/// from the SRA and ENA databases. It provides a command-line interface for downloading FASTQ
+/// files and supports various options for customizing the download process. It covers the entire
+/// process from accession to download.
 ///
 /// To get help, run:
 ///
@@ -44,17 +41,18 @@ use rsfq::{
     cli::Args,
     core::get_fastqs,
     nf::distribute,
-    utils::{__clean_nf_dirs, __concat, __move_to_root},
+    utils::{__clean_nf_dirs, __move_to_root},
 };
 
 const NF_LOG: &str = ".nextflow.log";
 const NF_HISTORY: &str = ".nextflow";
-const LOGS: &[&str] = &["err", "out"];
 
 #[tokio::main]
 async fn main() {
     let start = std::time::Instant::now();
-    init_with_level(Level::Info).unwrap();
+    init_with_level(Level::Info).unwrap_or_else(|e| {
+        panic!("Failed to initialize logger: {}", e);
+    });
 
     let args: Args = Args::parse();
     args.check();
@@ -79,12 +77,18 @@ async fn main() {
                     args.sleep,
                     args.retriever,
                     args.queue_size,
+                    args.provider,
                 );
 
                 log::info!("INFO: Cleaning and joining output files...");
-                std::fs::remove_file(NF_LOG).expect("ERROR: Could not remove Nextflow log files!");
-                std::fs::remove_dir_all(NF_HISTORY)
-                    .expect("ERROR: Could not remove Nextflow history!");
+                std::fs::remove_file(NF_LOG).unwrap_or_else(|e| {
+                    log::error!("ERROR: Could not remove Nextflow log files!: {}", e);
+                    std::process::exit(1);
+                });
+                std::fs::remove_dir_all(NF_HISTORY).unwrap_or_else(|e| {
+                    log::error!("ERROR: Could not remove Nextflow history!: {}", e);
+                    std::process::exit(1);
+                });
 
                 // INFO: moving/joining output files
                 // INFO: here is also the place to use --group-by [not implemented yet]

@@ -1,7 +1,11 @@
 use crate::{
     cli::{AccessionType, Args},
-    provs::ena::get_run_info,
-    utils::{validate_query, Retriever},
+    provs::{
+        ena::get_run_info,
+        sra::{download_run as download_from_sra, SRAError},
+        Provider,
+    },
+    utils::{validate_query, Layout, Retriever},
 };
 
 use futures::stream::{self, StreamExt};
@@ -51,8 +55,9 @@ const EXTENSIONS: &[&str] = &[
 ///
 /// ```rust, no_run
 /// use rsfq::core::get_fastqs;
-/// use rsfq::cli::Args;
-/// use rsfq::utils::validate_query;
+/// use rsfq::cli::{AccessionType, Args};
+/// use rsfq::provs::Provider;
+/// use rsfq::utils::{Layout, Retriever};
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -63,8 +68,20 @@ const EXTENSIONS: &[&str] = &[
 ///         sleep: 5,
 ///         force: false,
 ///         metadata: false,
+///         threads: 4,
+///         group_by_experiment: false,
+///         group_by_sample: false,
+///         prefix: "fastq".to_string(),
+///         nextflow: false,
+///         executor: "local".to_string(),
+///         queue: "null".to_string(),
+///         check_if_downloadable: false,
+///         retriever: Retriever::Aria2c,
+///         queue_size: 10,
+///         layout: Layout::Global,
+///         provider: Provider::ENA,
 ///     };
-///     get_fastqs(args).await.unwrap();
+///     get_fastqs(args).await;
 /// }
 /// ```
 pub async fn get_fastqs(args: Args) {
@@ -79,6 +96,9 @@ pub async fn get_fastqs(args: Args) {
                 args.metadata,
                 args.retriever,
                 args.check_if_downloadable,
+                args.provider,
+                args.layout,
+                args.threads,
             )
             .await;
         }
@@ -94,6 +114,9 @@ pub async fn get_fastqs(args: Args) {
                     args.metadata,
                     args.retriever.clone(),
                     args.check_if_downloadable,
+                    args.provider,
+                    args.layout,
+                    args.threads,
                 )
             }))
             .buffer_unordered(QUEUE_SIZE);
@@ -122,14 +145,28 @@ pub async fn get_fastqs(args: Args) {
 ///
 /// ```rust, no_run
 /// use rsfq::core::process_run;
+/// use rsfq::provs::Provider;
+/// use rsfq::utils::{Layout, Retriever};
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let result = process_run("ERR123456", None, 3, 5, false, false).await;
-///     assert!(result.is_ok());
+///     process_run(
+///         "ERR123456".to_string(),
+///         None,
+///         3,
+///         5,
+///         false,
+///         false,
+///         Retriever::Aria2c,
+///         false,
+///         Provider::ENA,
+///         Layout::Global,
+///         4,
+///     )
+///     .await;
 /// }
 /// ```
-async fn process_run(
+pub async fn process_run(
     accession: String,
     outdir: Option<PathBuf>,
     attempts: usize,
@@ -138,46 +175,116 @@ async fn process_run(
     metadata: bool,
     retriever: Retriever,
     check_if_downloadable: bool,
+    provider: Provider,
+    layout: Layout,
+    threads: usize,
 ) {
     let query = validate_query(&accession);
+
     let data = get_run_info(query, attempts, sleep).await;
 
-    if data.len() > 1 {
-        log::warn!("WARNING: More than one run found! Using the first one...");
-    }
-
-    if !metadata && !check_if_downloadable {
-        // INFO: just download the run
-        log::info!("INFO: Downloading FASTQ files...");
-
-        let run = data.get(0).expect("ERROR: No data found!").to_owned();
-        log::info!("Run data: {:#?}", data);
-
-        let _ = download_fastq(run, outdir, attempts, sleep, force, retriever).await;
-    } else {
+    if metadata || check_if_downloadable {
         if check_if_downloadable {
             let binding = HashMap::new();
             let run = data.get(0).unwrap_or(&binding);
 
             if run.is_empty() {
-                // INFO: accession does not exist in provider
                 println!("NOT_FOUND\t{}", accession);
             } else {
-                // INFO: accession exists and now checking if FTP exists
                 let binding = String::new();
                 let fastq_ftp = run.get(FASTQ_FTP).unwrap_or(&binding);
 
                 if fastq_ftp.is_empty() {
-                    // INFO: accession exists but no FTP field
                     println!("NOT_FOUND\t{}", accession);
                 } else {
-                    // INFO: accession exists and FTP field exists
                     println!("DOWNLOADABLE\t{}", accession);
                 }
             }
         } else {
             log::info!("Found {} runs!", data.len());
             log::info!("Run data: {:#?}", data);
+        }
+        return;
+    }
+
+    if data.len() > 1 {
+        log::warn!("WARNING: More than one run found! Using the first one...");
+    }
+
+    let run = data
+        .get(0)
+        .unwrap_or_else(|| {
+            log::error!("ERROR: No data found!");
+            std::process::exit(1);
+        })
+        .to_owned();
+
+    log::info!("Run data: {:#?}", data);
+
+    match provider {
+        Provider::ENA => {
+            let _ = download_fastq(
+                run.clone(),
+                outdir.clone(),
+                attempts,
+                sleep,
+                force,
+                retriever,
+                layout,
+            )
+            .await;
+        }
+        Provider::SRA => {
+            let run_accession = run
+                .get(RUN_ACCESSION)
+                .unwrap_or_else(|| {
+                    log::error!("ERROR: No run_accession field found in the run data!");
+                    std::process::exit(1);
+                })
+                .to_string();
+
+            let target_outdir = outdir.clone().unwrap_or_else(|| PathBuf::from("DOWNLOADS"));
+
+            match download_from_sra(
+                &run_accession,
+                &target_outdir,
+                threads,
+                attempts,
+                sleep,
+                force,
+                layout,
+            )
+            .await
+            {
+                Ok(paths) => {
+                    log::info!("Downloaded {} via SRA: {:?}", run_accession, paths);
+                }
+                Err(SRAError::MissingTool(tool)) => {
+                    log::warn!(
+                        "{} not found. Falling back to ENA download for {}",
+                        tool,
+                        run_accession
+                    );
+                    let _ = download_fastq(
+                        run.clone(),
+                        outdir,
+                        attempts,
+                        sleep,
+                        force,
+                        retriever,
+                        layout,
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    log::error!(
+                        "ERROR: SRA download failed for {}: {:?}",
+                        run_accession,
+                        err
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -200,6 +307,8 @@ async fn process_run(
 ///
 /// ```rust, no_run
 /// use rsfq::core::download_fastq;
+/// use rsfq::utils::{Layout, Retriever};
+/// use std::collections::HashMap;
 /// use std::path::Path;
 ///
 /// #[tokio::main]
@@ -208,13 +317,16 @@ async fn process_run(
 ///         ("fastq_ftp".to_string(), "ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123456/SRR123456.fastq.gz".to_string()),
 ///         ("fastq_md5".to_string(), "md5sum".to_string()),
 ///         ("library_layout".to_string(), "SINGLE".to_string()),
+///         ("run_accession".to_string(), "SRR123456".to_string()),
 ///     ]);
 ///     let outdir = Some(Path::new("/path/to/output"));
 ///     let attempts = 3;
 ///     let sleep = 5;
 ///     let force = false;
+///     let retriever = Retriever::Aria2c;
+///     let layout = Layout::Global;
 ///
-///     download_fastq(run, outdir, attempts, sleep, force).await;
+///     download_fastq(run, outdir, attempts, sleep, force, retriever, layout).await;
 /// }
 /// ```
 pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
@@ -224,29 +336,59 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
     sleep: usize,
     force: bool,
     retriever: Retriever,
+    layout: Layout,
 ) {
-    let fastq_ftp = run
-        .get(FASTQ_FTP)
-        .expect("ERROR: No fastq_ftp field found in the run data!");
-    let fastq_md5 = run
-        .get(FASTQ_MD5)
-        .expect("ERROR: No fastq_md5 field found in the run data!");
-    let layout = run
-        .get(LIBRARY_LAYOUT)
-        .expect("ERROR: No library_layout field found in the run data!");
-    let accession = run
-        .get(RUN_ACCESSION)
-        .expect("ERROR: No run_accession field found in the run data!");
+    let fastq_ftp = run.get(FASTQ_FTP).unwrap_or_else(|| {
+        log::error!("ERROR: No fastq_ftp field found in the run data!");
+        std::process::exit(1);
+    });
+    let fastq_md5 = run.get(FASTQ_MD5).unwrap_or_else(|| {
+        log::error!("ERROR: No fastq_md5 field found in the run data!");
+        std::process::exit(1);
+    });
+    let library_layout = run.get(LIBRARY_LAYOUT).unwrap_or_else(|| {
+        log::error!("ERROR: No library_layout field found in the run data!");
+        std::process::exit(1);
+    });
+    let accession = run.get(RUN_ACCESSION).unwrap_or_else(|| {
+        log::error!("ERROR: No run_accession field found in the run data!");
+        std::process::exit(1);
+    });
 
     let outdir = outdir
         .as_ref()
         .map(|x| x.as_ref())
         .unwrap_or_else(|| Path::new("DOWNLOADS"));
 
-    let ftp_entries = fastq_ftp.split(';');
+    let ftp_entries = fastq_ftp.split(';').collect::<Vec<&str>>();
     let md5_entries = fastq_md5.split(';');
 
-    for (ftp, md5) in ftp_entries.zip(md5_entries) {
+    // INFO: performs strick matching of the number of files, scRNA-Seq will have only one file
+    match layout {
+        Layout::Single => {
+            if ftp_entries.len() != 1 {
+                log::error!(
+                    "ERROR: Only single FASTQ files were expected! Found {} files for {}",
+                    ftp_entries.len(),
+                    accession
+                );
+                std::process::exit(1);
+            }
+        }
+        Layout::Paired => {
+            if ftp_entries.len() != 2 {
+                log::error!(
+                    "ERROR: Only paired FASTQ files were expected! Found {} files for {}",
+                    ftp_entries.len(),
+                    accession
+                );
+                std::process::exit(1);
+            }
+        }
+        Layout::Global => {}
+    }
+
+    for (ftp, md5) in ftp_entries.into_iter().zip(md5_entries) {
         let observed = Path::new(ftp)
             .file_name()
             .and_then(|s| s.to_str())
@@ -255,7 +397,7 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
                 std::process::exit(1);
             });
 
-        if layout == PAIRED {
+        if library_layout == PAIRED {
             if !(ftp.ends_with(R1) || ftp.ends_with(R2)) {
                 if !__has_expected_filename(accession, observed, EXTENSIONS) {
                     log::error!(
@@ -266,7 +408,7 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
                     std::process::exit(1);
                 }
             }
-        } else if layout == SINGLE {
+        } else if library_layout == SINGLE {
             if !__has_expected_filename(accession, observed, EXTENSIONS) {
                 log::error!(
                     "ERROR: Expected {}.fastq.gz/.fq.gz/*subreads.fastq.gz but found {} in the fastq_ftp field",
@@ -300,11 +442,13 @@ pub async fn download_fastq<K: AsRef<Path> + Debug + Send + Sync>(
 /// # Example
 ///
 /// ```rust, no_run
+/// use rsfq::core::__has_expected_filename;
 /// let filename = "example.fastq.gz";
 /// let extensions = &["fastq.gz", "fq.gz"];
-/// assert!(__has_expected_filename(filename, extensions));
+/// let accession = "example";
+/// assert!(__has_expected_filename(accession, filename, extensions));
 /// ```
-fn __has_expected_filename(accession: &str, observed: &str, extensions: &[&str]) -> bool {
+pub fn __has_expected_filename(accession: &str, observed: &str, extensions: &[&str]) -> bool {
     extensions.iter().any(|&ext| {
         let expected = format!("{}{}", accession, ext);
         expected == observed
@@ -328,8 +472,9 @@ fn __has_expected_filename(accession: &str, observed: &str, extensions: &[&str])
 ///
 /// # Example
 ///
-/// ```
+/// ```rust, no_run
 /// use rsfq::core::download;
+/// use rsfq::utils::Retriever;
 /// use std::path::PathBuf;
 ///
 /// #[tokio::main]
@@ -337,8 +482,9 @@ fn __has_expected_filename(accession: &str, observed: &str, extensions: &[&str])
 ///     let ftp = "ftp://ftp.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR123456/SRR123456.fastq.gz";
 ///     let outdir = PathBuf::from("/path/to/output");
 ///     let md5 = "md5sum";
+///     let retriever = Retriever::Aria2c;
 ///
-///     match download(ftp, outdir, 3, 5, false, md5).await {
+///     match download(ftp, &outdir, 3, 5, false, md5, retriever).await {
 ///         Some(path) => println!("Downloaded file to: {}", path.display()),
 ///         None => println!("Download failed"),
 ///     }
@@ -357,9 +503,15 @@ pub async fn download<K: AsRef<Path> + Debug>(
     let fastq = outdir.as_ref().join(
         Path::new(ftp)
             .file_name()
-            .expect("ERROR: No file name found")
+            .unwrap_or_else(|| {
+                log::error!("ERROR: No file name found");
+                std::process::exit(1);
+            })
             .to_str()
-            .expect("ERROR: Invalid file name!"),
+            .unwrap_or_else(|| {
+                log::error!("ERROR: Invalid file name!");
+                std::process::exit(1);
+            }),
     );
 
     log::info!("Downloading {} to {}", ftp, fastq.display());
@@ -382,12 +534,15 @@ pub async fn download<K: AsRef<Path> + Debug>(
     let mut cmd = retriever.materialize(ftp, &fastq);
 
     while max_attempts >= attempt {
-        let output = cmd
-            .output()
-            .await
-            .expect("ERROR: Failed to execute command");
+        let output = cmd.output().await.unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to execute command: {}", e);
+            std::process::exit(1);
+        });
 
-        let status = output.status.code().expect("ERROR: No exit code found!");
+        let status = output.status.code().unwrap_or_else(|| {
+            log::error!("ERROR: No exit code found!");
+            std::process::exit(1);
+        });
 
         if status != 0 {
             log::error!("ERROR: Failed to download {} with status {}", ftp, status);
@@ -398,9 +553,10 @@ pub async fn download<K: AsRef<Path> + Debug>(
                 log::info!("--force used, skipping MD5sum check for {}", ftp);
                 break;
             } else {
-                let fq_md5 = md5sum(&fastq)
-                    .await
-                    .expect("ERROR: Failed to calculate MD5sum!");
+                let fq_md5 = md5sum(&fastq).await.unwrap_or_else(|| {
+                    log::error!("ERROR: Failed to calculate MD5sum!");
+                    std::process::exit(1);
+                });
 
                 if fq_md5 != md5 {
                     log::error!(
@@ -436,17 +592,21 @@ pub async fn download<K: AsRef<Path> + Debug>(
 ///
 /// ```rust, no_run
 /// use rsfq::core::md5sum;
+/// use std::path::Path;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let fastq = "path/to/fastq/file.fastq";
-///     let md5 = md5sum(fastq).await;
+///     let fastq = Path::new("path/to/fastq/file.fastq");
+///     let md5 = md5sum(&fastq).await;
 ///     println!("MD5 checksum: {:?}", md5);
 /// }
 /// ```
 pub async fn md5sum<K: AsRef<Path> + Debug>(fastq: &K) -> Option<String> {
     let fastq = if !fastq.as_ref().exists() {
-        check_fq_path(fastq).expect("ERROR: File not found!")
+        check_fq_path(fastq).unwrap_or_else(|| {
+            log::error!("ERROR: File not found!");
+            std::process::exit(1);
+        })
     } else {
         fastq.as_ref().to_path_buf()
     };
@@ -480,19 +640,24 @@ pub async fn md5sum<K: AsRef<Path> + Debug>(fastq: &K) -> Option<String> {
 /// # Examples
 ///
 /// ```rust, no_run
+/// use rsfq::core::check_fq_path;
+/// use std::path::PathBuf;
 /// let fastq_path = PathBuf::from("/path/to/fastq");
 /// let absolute_path = check_fq_path(fastq_path);
 /// assert!(absolute_path.is_some());
 /// ```
-fn check_fq_path<K: AsRef<Path> + Debug>(fastq: K) -> Option<PathBuf> {
+pub fn check_fq_path<K: AsRef<Path> + Debug>(fastq: K) -> Option<PathBuf> {
     // WARN: try to look inside the Nextflow work directory
-    let nf_work_dir = std::env::current_dir().expect("ERROR: Could not get current directory!");
+    let nf_work_dir = std::env::current_dir().unwrap_or_else(|e| {
+        log::error!("ERROR: Could not get current directory!: {}", e);
+        std::process::exit(1);
+    });
 
     if nf_work_dir.exists() {
-        let filename = fastq
-            .as_ref()
-            .file_name()
-            .expect("ERROR: No file name found");
+        let filename = fastq.as_ref().file_name().unwrap_or_else(|| {
+            log::error!("ERROR: No file name found");
+            std::process::exit(1);
+        });
 
         for entry in WalkDir::new(nf_work_dir)
             .min_depth(2)

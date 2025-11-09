@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use crate::utils::Retriever;
+use crate::{provs::Provider, utils::Retriever};
 
 const NF_SCRIPT: &str = "rsfq.nf";
 const NF_CONFIG: &str = "nextflow.config";
@@ -28,6 +28,9 @@ const TARGET: &str = "target/release/rsfq";
 /// # Examples
 ///
 /// ```rust, no_run
+/// use rsfq::nf::distribute;
+/// use rsfq::provs::Provider;
+/// use rsfq::utils::Retriever;
 /// use std::path::PathBuf;
 ///
 /// let accessions = vec!["accession1".to_string(), "accession2".to_string()];
@@ -37,8 +40,21 @@ const TARGET: &str = "target/release/rsfq";
 /// let threads = 4;
 /// let queue = "queue".to_string();
 /// let sleep = 5;
+/// let retriever = Retriever::Aria2c;
+/// let queue_size = 10;
 ///
-/// distribute(accessions, executor, attempts, &outdir, threads, queue, sleep);
+/// distribute(
+///     accessions,
+///    executor,
+///     attempts,
+///     &outdir,
+///     threads,
+///     queue,
+///     sleep,
+///     retriever,
+///     queue_size,
+///     Provider::ENA,
+/// );
 /// ```
 pub fn distribute(
     accessions: Vec<String>,
@@ -50,25 +66,40 @@ pub fn distribute(
     sleep: usize,
     retriever: Retriever,
     queue_size: usize,
+    provider: Provider,
 ) {
     let joblist = accessions.join("\n");
-    std::fs::write(JOBLIST, &joblist).expect("ERROR: Could not create joblist file!");
+    std::fs::write(JOBLIST, &joblist).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not create joblist file!: {}", e);
+        std::process::exit(1);
+    });
 
     let target = std::env::current_dir()
-        .expect("ERROR: could not get current_dir!")
+        .unwrap_or_else(|e| {
+            log::error!("ERROR: could not get current_dir!: {}", e);
+            std::process::exit(1);
+        })
         .join(TARGET);
 
-    make_script(target, attempts, sleep).expect("ERROR: Could not create nextflow script!");
-    make_config(executor.clone(), queue, threads, queue_size)
-        .expect("ERROR: Could not create nextflow config!");
+    make_script(target, attempts, sleep, provider).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not create nextflow script!: {}", e);
+        std::process::exit(1);
+    });
+    make_config(executor.clone(), queue, threads, queue_size).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not create nextflow config!: {}", e);
+        std::process::exit(1);
+    });
 
-    let outdir = outdir
-        .to_str()
-        .expect("ERROR: Invalid output directory!")
-        .to_string();
+    let outdir = outdir.to_str().unwrap_or_else(|| {
+        log::error!("ERROR: Invalid output directory!");
+        std::process::exit(1);
+    });
 
-    std::fs::create_dir_all(&outdir).expect("ERROR: Could not create output directory!");
-    std::env::set_var("NXF_WORK", outdir.clone());
+    std::fs::create_dir_all(&outdir).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not create output directory!: {}", e);
+        std::process::exit(1);
+    });
+    std::env::set_var("NXF_WORK", outdir);
 
     let cmd = format!(
         "nextflow run {} --joblist {} --outdir {} --retriever {} -c {} -profile {}",
@@ -86,15 +117,27 @@ pub fn distribute(
         .arg("-c")
         .arg(cmd)
         .status()
-        .expect("ERROR: Failed to run nextflow!");
+        .unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to run nextflow!: {}", e);
+            std::process::exit(1);
+        });
 
     if !job.success() {
         std::process::exit(1);
     }
 
-    std::fs::remove_file(NF_SCRIPT).expect("ERROR: Could not remove Nextflow script!");
-    std::fs::remove_file(NF_CONFIG).expect("ERROR: Could not remove Nextflow config!");
-    std::fs::remove_file(JOBLIST).expect("ERROR: Could not remove joblist file!");
+    std::fs::remove_file(NF_SCRIPT).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not remove Nextflow script!: {}", e);
+        std::process::exit(1);
+    });
+    std::fs::remove_file(NF_CONFIG).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not remove Nextflow config!: {}", e);
+        std::process::exit(1);
+    });
+    std::fs::remove_file(JOBLIST).unwrap_or_else(|e| {
+        log::error!("ERROR: Could not remove joblist file!: {}", e);
+        std::process::exit(1);
+    });
 }
 
 /// Write a Nextflow script to download accessions in parallel.
@@ -112,13 +155,21 @@ pub fn distribute(
 ///
 /// ```rust, no_run
 /// use rsfq::nf::make_script;
+/// use rsfq::provs::Provider;
+/// use std::path::PathBuf;
 ///
 /// let max_attempts = 3;
 /// let sleep = 5;
+/// let target = PathBuf::from("target/release/rsfq");
 ///
-/// make_script(max_attempts, sleep).expect("ERROR: Failed to create Nextflow script!");
+/// make_script(target, max_attempts, sleep, Provider::ENA);
 /// ```
-fn make_script(target: PathBuf, max_attempts: usize, sleep: usize) -> io::Result<()> {
+pub fn make_script(
+    target: PathBuf,
+    max_attempts: usize,
+    sleep: usize,
+    provider: Provider,
+) -> io::Result<()> {
     let script = format!(
         r#"#!/usr/bin/env nextflow
 
@@ -130,7 +181,7 @@ process GET {{
 
     script:
     """
-    {target} -a ${{run}} --outdir ${{outdir}} --max-attempts {max_attempts} --sleep {sleep} -T ${{retriever}}
+    {target} -a ${{run}} --outdir ${{outdir}} --max-attempts {max_attempts} --sleep {sleep} -T ${{retriever}} -P {provider}
     """
 
 }}
@@ -145,7 +196,8 @@ workflow {{
 "#,
         target = target.display(),
         max_attempts = max_attempts,
-        sleep = sleep
+        sleep = sleep,
+        provider = provider
     );
 
     let mut file = File::create(NF_SCRIPT)?;
@@ -171,20 +223,22 @@ workflow {{
 /// ```rust, no_run
 /// use rsfq::nf::make_config;
 ///
-/// let executor = "slurm";
-/// let queue = "normal";
+/// let executor = "slurm".to_string();
+/// let queue = "normal".to_string();
 /// let threads = 4;
+/// let queue_size = 10;
 ///
-/// make_config(executor, queue, threads).expect("ERROR: Failed to create Nextflow configuration file!");
+/// make_config(executor, queue, threads, queue_size);
 /// ```
-fn make_config(
+pub fn make_config(
     executor: String,
     queue: String,
     threads: usize,
     queue_size: usize,
 ) -> io::Result<()> {
     let config = format!(
-        r#"process {{
+        r#"
+    process {{
         cpus = {threads}
         time = 24.h
         memory = 2.GB
